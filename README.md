@@ -15,7 +15,7 @@ ResumeEnhancer is an intelligent platform designed to bridge the gap between tal
 
 ResumeEnhancer solves this by providing instant, actionable insights.
 
-![ResumeEnhancer Demo GIF](https://placehold.co/800x400/333/FFF?text=App+Screenshot+or+GIF+Here)
+![ResumeEnhancer Demo GIF](https://placehold.co/800x400/333/FFF?text=App+Screenshot)
 *(A GIF or screenshot showing the app in action would be perfect here)*
 
 ### Key Features
@@ -49,5 +49,3 @@ Our vision is to build a comprehensive career toolkit. Here's what we're plannin
 -   [ ] **Recruiter Portal**: A dashboard for recruiters to screen multiple candidates efficiently.
 -   [ ] **Interactive Editor**: Enable users to edit their resume text directly on the platform and see the score change in real-time.
 -   [ ] **Advanced NLP Models**: Integrate more sophisticated models (like BERT) for deeper semantic understanding.
-
-This new `README.md` is much more focused on showcasing the project itself. Would you like me to create the separate `SETUP.md` or `INSTALL.md` file with the technical setup instructions now?
