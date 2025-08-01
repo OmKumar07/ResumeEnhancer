@@ -1,225 +1,147 @@
-# main.py
 import io
 import docx
 import PyPDF2
-import spacy
+import httpx 
+import json
+import os
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import re
+from pydantic import BaseModel, ValidationError
 
-# --- METADATA & CORS ---
+# --- CONFIGURATION ---
+load_dotenv() 
 
-# Description for the API documentation
-description = """
-ResumeEnhancer API helps you analyze your resume against a job description.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    print("Warning: GEMINI_API_KEY not found. Please set it in your .env file.")
 
-You can:
-- Calculate a match score.
-- Identify keywords that match.
-- Find keywords that are missing from your resume.
-"""
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
 
-# Initialize the FastAPI app
+# --- FastAPI App Setup ---
 app = FastAPI(
-    title="ResumeEnhancer API",
-    description=description,
-    version="1.0.0",
+    title="ResumeEnhancer Intelligent API",
+    description="An intelligent API using Gemini to analyze resumes against job descriptions.",
+    version="2.1.0", # Version bump for the fix
 )
-
-# Configure CORS (Cross-Origin Resource Sharing)
-# This allows your frontend (running on a different domain/port) to communicate with this backend.
-origins = [
-    "http://localhost:3000",  # The default address for React development server
-    "http://localhost:8080",
-    # Add other frontend origins if needed
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:3000", "http://localhost:8080"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Load the spaCy English model
-# We use 'en_core_web_sm' for its efficiency.
-nlp = spacy.load("en_core_web_sm")
-
-
-# --- UTILITY FUNCTIONS ---
-
+# --- UTILITY FUNCTIONS FOR FILE PARSING ---
 def extract_text_from_docx(file_stream):
-    """Extracts text from a DOCX file."""
+    """Extracts text from a DOCX file stream."""
     doc = docx.Document(file_stream)
     return "\n".join([paragraph.text for paragraph in doc.paragraphs])
 
 def extract_text_from_pdf(file_stream):
-    """Extracts text from a PDF file."""
+    """Extracts text from a PDF file stream."""
     reader = PyPDF2.PdfReader(file_stream)
     text = ""
     for page in reader.pages:
-        text += page.extract_text() or ""
+        extracted = page.extract_text()
+        if extracted:
+            text += extracted
     return text
 
-def preprocess_text(text):
-    """
-    Cleans and preprocesses the text:
-    1. Removes punctuation and special characters.
-    2. Converts to lowercase.
-    3. Lemmatizes words (e.g., 'running' -> 'run').
-    4. Removes common stop words.
-    """
-    # Remove punctuation and non-alphanumeric characters
-    text = re.sub(r'[^\w\s]', '', text)
-    doc = nlp(text.lower())
-    
-    tokens = [
-        token.lemma_ for token in doc 
-        if not token.is_stop and not token.is_punct and token.is_alpha
-    ]
-    return " ".join(tokens)
-
-
-# --- PYDANTIC MODELS (for Request/Response structure) ---
-
-class AnalysisResult(BaseModel):
-    """Defines the structure of the analysis result returned by the API."""
-    match_score: float
-    matched_keywords: list[str]
-    missing_keywords: list[str]
-
-
-# --- API ENDPOINT ---
-
-@app.post("/analyze", response_model=AnalysisResult)
-async def analyze_resume(
-    resume: UploadFile = File(..., description="The user's resume file (PDF or DOCX)."),
-    job_description: str = Form(..., description="The job description text.")
-):
-    """
-    Analyzes a resume against a job description and returns a match score
-    and keyword analysis.
-    """
-    # 1. Validate file type
-    if not resume.filename.endswith(('.pdf', '.docx')):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF or DOCX file.")
-
-    # 2. Extract text from the uploaded resume
-    try:
-        file_stream = io.BytesIO(await resume.read())
-        if resume.filename.endswith('.pdf'):
-            resume_text = extract_text_from_pdf(file_stream)
-        else: # .docx
-            resume_text = extract_text_from_docx(file_stream)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading file: {e}")
-
-    # 3. Preprocess both the resume and job description text
-    processed_resume = preprocess_text(resume_text)
-    processed_jd = preprocess_text(job_description)
-
-    # 4. Vectorize text using TF-IDF
-    # TF-IDF (Term Frequency-Inverse Document Frequency) converts text into numerical
-    # vectors, giving more weight to words that are important to a document.
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform([processed_resume, processed_jd])
-
-    # 5. Calculate Cosine Similarity
-    # This measures the cosine of the angle between the two vectors, giving a score
-    # from 0 (not similar) to 1 (identical).
-    cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])
-    match_score = round(cosine_sim[0][0] * 100, 2)
-
-    # 6. Keyword Analysis
-    jd_vectorizer = TfidfVectorizer().fit(preprocess_text(t) for t in [job_description])
-    jd_keywords = set(jd_vectorizer.get_feature_names_out())
-    
-    resume_vectorizer = TfidfVectorizer().fit(preprocess_text(t) for t in [resume_text])
-    resume_keywords = set(resume_vectorizer.get_feature_names_out())
-
-    # Find matched and missing keywords
-    matched_keywords = list(jd_keywords.intersection(resume_keywords))
-    missing_keywords = list(jd_keywords.difference(resume_keywords))
-
-    return AnalysisResult(
-        match_score=match_score,
-        matched_keywords=sorted(matched_keywords),
-        missing_keywords=sorted(missing_keywords)
-    )
-
-@app.get("/")
-def read_root():
-    """A simple root endpoint to confirm the server is running."""
-    return {"message": "Welcome to the ResumeEnhancer API! Go to /docs for the documentation."}
-# Add this import at the top of your file with the others
-import os 
-
-# --- NEW GEMINI-POWERED ANALYSIS SECTION ---
-
-class GeminiAnalysisRequest(BaseModel):
-    """Defines the structure for the new analysis request."""
-    resume_text: str
-    job_description: str
-
+# --- PYDANTIC MODELS (Data Structures) ---
 class IdealCandidate(BaseModel):
-    """Defines the structure for the ideal candidate profile."""
     summary: str
     key_skills: list[str]
     key_technologies: list[str]
     experience_level: str
 
-# This is a placeholder for now. We will build this out.
-class FullAnalysis(BaseModel):
+class ResumeFeedback(BaseModel):
+    strengths: list[str]
+    areas_for_improvement: list[str]
+    suggestion_summary: str
+
+class ActionableSuggestions(BaseModel):
+    bullet_points: list[str]
+
+class GeminiAnalysisResponse(BaseModel):
     ideal_candidate: IdealCandidate
-    # We will add more fields here later, like strengths, weaknesses, etc.
+    resume_feedback: ResumeFeedback
+    actionable_suggestions: ActionableSuggestions
 
+# --- GEMINI API HELPER FUNCTION ---
+async def call_gemini_api(prompt: str, response_schema: BaseModel):
+    """Calls the Gemini API and validates the response against a Pydantic schema."""
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": response_schema.model_json_schema()
+        }
+    }
+    # Increased timeout for potentially long Gemini responses
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        try:
+            response = await client.post(GEMINI_API_URL, json=payload)
+            response.raise_for_status()
+            response_json = response.json()
+            response_text = response_json['candidates'][0]['content']['parts'][0]['text']
+            parsed_data = response_schema.model_validate_json(response_text)
+            return parsed_data
+        except httpx.HTTPStatusError as e:
+            print(f"HTTP error occurred: {e.response.text}")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Gemini API request failed: {e.response.text}")
+        except (ValidationError, KeyError, IndexError, json.JSONDecodeError) as e:
+            print(f"Error parsing or validating Gemini response: {e}")
+            raise HTTPException(status_code=500, detail="Failed to process response from Gemini API.")
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            raise HTTPException(status_code=500, detail="An unexpected error occurred while contacting the Gemini API.")
 
-@app.post("/gemini-analyze", response_model=IdealCandidate)
-async def gemini_analyze_resume(request: GeminiAnalysisRequest):
+# --- CORRECTED API ENDPOINT ---
+@app.post("/gemini-analyze", response_model=GeminiAnalysisResponse)
+async def gemini_analyze_resume(
+    resume: UploadFile = File(..., description="The user's resume file (PDF, DOCX, or TXT)."),
+    job_description: str = Form(..., description="The job description text or title.")
+):
     """
-    Performs an intelligent analysis using the Gemini API.
-    
-    Step 1: Creates a profile of the ideal candidate based on the job description.
-    (Future steps will compare the resume against this profile).
+    Performs an intelligent, multi-step analysis using the Gemini API.
+    This endpoint now correctly handles file uploads and parsing on the backend.
     """
-    
-    # --- Step 1: Create Ideal Candidate Profile ---
-    
-    # This prompt asks Gemini to act as an expert recruiter.
-    ideal_candidate_prompt = f"""
-    As an expert technical recruiter, analyze the following job description and create a profile of the ideal candidate. 
-    Identify the most important skills, technologies, and the required level of experience.
-
-    **Job Description:**
-    ---
-    {request.job_description}
-    ---
-    """
-
+    # Step 1: Extract text from the uploaded resume file
     try:
-        # This is where you would make the actual call to the Gemini API
-        # For now, we will return a hardcoded example to test the structure.
+        file_stream = io.BytesIO(await resume.read())
+        if resume.filename.endswith('.pdf'):
+            resume_text = extract_text_from_pdf(file_stream)
+        elif resume.filename.endswith('.docx'):
+            resume_text = extract_text_from_docx(file_stream)
+        elif resume.filename.endswith('.txt'):
+             resume_text = file_stream.read().decode('utf-8')
+        else:
+            raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PDF, DOCX, or TXT file.")
         
-        # In the next step, we will replace this with a real API call.
-        print("--- PROMPT FOR IDEAL CANDIDATE ---")
-        print(ideal_candidate_prompt)
-        print("---------------------------------")
-
-        # --- MOCK RESPONSE (Example of what Gemini would return) ---
-        mock_ideal_candidate = IdealCandidate(
-            summary="The ideal candidate is a mid-to-senior level Web Developer with strong proficiency in modern frontend frameworks like React and backend experience with Node.js. They should be skilled in building and consuming RESTful APIs and have a solid understanding of database management.",
-            key_skills=["API Design", "Agile Methodologies", "Problem Solving", "UI/UX Principles"],
-            key_technologies=["React", "Node.js", "Express", "PostgreSQL", "Tailwind CSS", "Docker"],
-            experience_level="3-5 years"
-        )
-
-        return mock_ideal_candidate
+        if not resume_text.strip():
+            raise HTTPException(status_code=400, detail="Could not extract text from the resume. The file might be empty, image-based, or corrupted.")
 
     except Exception as e:
-        # This will handle errors if the API call fails in the future
-        raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reading or parsing the resume file: {str(e)}")
+
+    # Step 2: Create Ideal Candidate Profile
+    ideal_candidate_prompt = f"As an expert technical recruiter, analyze the following job description and create a profile of the ideal candidate.\n\n**Job Description:**\n---\n{job_description}\n---"
+    ideal_candidate_response = await call_gemini_api(ideal_candidate_prompt, IdealCandidate)
+
+    # Step 3: Analyze Resume Against the Ideal Profile
+    resume_analysis_prompt = f"""You are an expert career coach. Compare the provided resume against the ideal candidate profile and the original job description. Provide constructive feedback.\n\n**Ideal Candidate Profile:**\n---\n{ideal_candidate_response.model_dump_json(indent=2)}\n---\n\n**Original Job Description:**\n---\n{job_description}\n---\n\n**User's Resume:**\n---\n{resume_text}\n---"""
+    resume_feedback_response = await call_gemini_api(resume_analysis_prompt, ResumeFeedback)
+
+    # Step 4: Generate Actionable Suggestions
+    suggestion_generation_prompt = f"""You are an expert resume writer. Based on the previous analysis (strengths, weaknesses, and job description), generate 3-4 specific, action-oriented bullet points that the user can add to their resume. The bullet points should be impactful and use professional language.\n\n**Analysis Context:**\n---\nIdeal Candidate: {ideal_candidate_response.summary}\nCandidate's Strengths: {', '.join(resume_feedback_response.strengths)}\nCandidate's Weaknesses: {', '.join(resume_feedback_response.areas_for_improvement)}\n---\n\n**User's Resume:**\n---\n{resume_text}\n---"""
+    actionable_suggestions_response = await call_gemini_api(suggestion_generation_prompt, ActionableSuggestions)
+
+    # Final Step: Combine and Return the Full Analysis
+    return GeminiAnalysisResponse(
+        ideal_candidate=ideal_candidate_response,
+        resume_feedback=resume_feedback_response,
+        actionable_suggestions=actionable_suggestions_response,
+    )
