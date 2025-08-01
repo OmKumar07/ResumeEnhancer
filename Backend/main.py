@@ -156,3 +156,70 @@ async def analyze_resume(
 def read_root():
     """A simple root endpoint to confirm the server is running."""
     return {"message": "Welcome to the ResumeEnhancer API! Go to /docs for the documentation."}
+# Add this import at the top of your file with the others
+import os 
+
+# --- NEW GEMINI-POWERED ANALYSIS SECTION ---
+
+class GeminiAnalysisRequest(BaseModel):
+    """Defines the structure for the new analysis request."""
+    resume_text: str
+    job_description: str
+
+class IdealCandidate(BaseModel):
+    """Defines the structure for the ideal candidate profile."""
+    summary: str
+    key_skills: list[str]
+    key_technologies: list[str]
+    experience_level: str
+
+# This is a placeholder for now. We will build this out.
+class FullAnalysis(BaseModel):
+    ideal_candidate: IdealCandidate
+    # We will add more fields here later, like strengths, weaknesses, etc.
+
+
+@app.post("/gemini-analyze", response_model=IdealCandidate)
+async def gemini_analyze_resume(request: GeminiAnalysisRequest):
+    """
+    Performs an intelligent analysis using the Gemini API.
+    
+    Step 1: Creates a profile of the ideal candidate based on the job description.
+    (Future steps will compare the resume against this profile).
+    """
+    
+    # --- Step 1: Create Ideal Candidate Profile ---
+    
+    # This prompt asks Gemini to act as an expert recruiter.
+    ideal_candidate_prompt = f"""
+    As an expert technical recruiter, analyze the following job description and create a profile of the ideal candidate. 
+    Identify the most important skills, technologies, and the required level of experience.
+
+    **Job Description:**
+    ---
+    {request.job_description}
+    ---
+    """
+
+    try:
+        # This is where you would make the actual call to the Gemini API
+        # For now, we will return a hardcoded example to test the structure.
+        
+        # In the next step, we will replace this with a real API call.
+        print("--- PROMPT FOR IDEAL CANDIDATE ---")
+        print(ideal_candidate_prompt)
+        print("---------------------------------")
+
+        # --- MOCK RESPONSE (Example of what Gemini would return) ---
+        mock_ideal_candidate = IdealCandidate(
+            summary="The ideal candidate is a mid-to-senior level Web Developer with strong proficiency in modern frontend frameworks like React and backend experience with Node.js. They should be skilled in building and consuming RESTful APIs and have a solid understanding of database management.",
+            key_skills=["API Design", "Agile Methodologies", "Problem Solving", "UI/UX Principles"],
+            key_technologies=["React", "Node.js", "Express", "PostgreSQL", "Tailwind CSS", "Docker"],
+            experience_level="3-5 years"
+        )
+
+        return mock_ideal_candidate
+
+    except Exception as e:
+        # This will handle errors if the API call fails in the future
+        raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {str(e)}")
